@@ -3,9 +3,7 @@ services:
     name: medical-lab-parser-server
     env: node
     nodeVersion: 18.15.11
-    buildCommand: |
-      apt-get update && apt-get install -y poppler-utils
-      npm install
+    buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: NODE_ENV

@@ -6,7 +6,7 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import sharp from 'sharp';
 
 dotenv.config();
@@ -104,15 +104,20 @@ async function convertPdfToImages(pdfBuffer: Buffer): Promise<string[]> {
       const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [i]);
       singlePageDoc.addPage(copiedPage);
       
-      // Save as PNG using sharp
-      const pngBytes = await singlePageDoc.save();
-      const optimizedImage = await sharp(pngBytes)
-        .resize(2000, null, {
-          fit: 'inside',
-          withoutEnlargement: true
-        })
-        .png({ quality: 80 })
-        .toBuffer();
+      // Save as PDF
+      const pdfBytes = await singlePageDoc.save();
+      
+      // Convert PDF to PNG using sharp
+      const optimizedImage = await sharp(pdfBytes, {
+        density: 300, // Higher DPI for better quality
+        pages: 1, // Only process the first page
+      })
+      .resize(2000, null, {
+        fit: 'inside',
+        withoutEnlargement: true
+      })
+      .png({ quality: 80 })
+      .toBuffer();
       
       const base64Image = `data:image/png;base64,${optimizedImage.toString('base64')}`;
       base64Images.push(base64Image);
