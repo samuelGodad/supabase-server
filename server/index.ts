@@ -6,7 +6,8 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import pdf from 'pdf-poppler';
+import { PDFDocument } from 'pdf-lib';
+import sharp from 'sharp';
 
 dotenv.config();
 
@@ -83,43 +84,41 @@ function tryParseJSON(text: string): { success: boolean; data?: any; error?: str
 
 async function convertPdfToImages(pdfBuffer: Buffer): Promise<string[]> {
   const tempDir = os.tmpdir();
-  const pdfPath = path.join(tempDir, `temp_${Date.now()}.pdf`);
   const outputDir = path.join(tempDir, `output_${Date.now()}`);
-  
-  // Write PDF to temporary file
-  fs.writeFileSync(pdfPath, pdfBuffer);
   
   // Create output directory
   fs.mkdirSync(outputDir, { recursive: true });
   
   try {
-    // Convert PDF to images using pdf-poppler
-    const opts = {
-      format: 'png',
-      out_dir: outputDir,
-      out_prefix: 'page',
-      page: null // convert all pages
-    };
-    
-    await pdf.convert(pdfPath, opts);
-    
-    // Read all generated PNG files
-    const files = fs.readdirSync(outputDir);
+    // Load the PDF document
+    const pdfDoc = await PDFDocument.load(pdfBuffer);
     const base64Images: string[] = [];
     
-    for (const file of files) {
-      if (file.endsWith('.png')) {
-        const imagePath = path.join(outputDir, file);
-        const imageBuffer = fs.readFileSync(imagePath);
-        const base64Image = imageBuffer.toString('base64');
-        base64Images.push(`data:image/png;base64,${base64Image}`);
-      }
+    // Process each page
+    for (let i = 0; i < pdfDoc.getPageCount(); i++) {
+      const page = pdfDoc.getPage(i);
+      
+      // Convert page to PNG
+      const pngImage = await page.exportAsPNG({
+        scale: 2.0, // Higher resolution
+      });
+      
+      // Use sharp to optimize the image
+      const optimizedImage = await sharp(pngImage)
+        .resize(2000, null, { // Resize to max width of 2000px
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .png({ quality: 80 })
+        .toBuffer();
+      
+      const base64Image = `data:image/png;base64,${optimizedImage.toString('base64')}`;
+      base64Images.push(base64Image);
     }
     
     return base64Images;
   } finally {
     // Clean up temporary files
-    if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
     if (fs.existsSync(outputDir)) {
       const files = fs.readdirSync(outputDir);
       for (const file of files) {
