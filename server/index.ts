@@ -11,6 +11,8 @@ import sharp from 'sharp';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { createCanvas } from 'canvas';
+import pdfParse from 'pdf-parse';
+import { mkdir, unlink } from 'fs/promises';
 
 const execAsync = promisify(exec);
 
@@ -88,48 +90,78 @@ function tryParseJSON(text: string): { success: boolean; data?: any; error?: str
 }
 
 async function convertPdfToImages(pdfBuffer: Buffer): Promise<string[]> {
-  const tempDir = os.tmpdir();
-  const outputDir = path.join(tempDir, `output_${Date.now()}`);
-  
-  // Create output directory
-  fs.mkdirSync(outputDir, { recursive: true });
+  const imagePaths: string[] = [];
+  const tempDir = path.join(__dirname, 'temp');
   
   try {
-    // Load the PDF document
+    // Create temp directory if it doesn't exist
+    await mkdir(tempDir, { recursive: true });
+
+    // Load PDF document
     const pdfDoc = await PDFDocument.load(pdfBuffer);
-    const base64Images: string[] = [];
-    
-    // Process each page
-    for (let i = 0; i < pdfDoc.getPageCount(); i++) {
+    const numPages = pdfDoc.getPageCount();
+
+    // Extract text content using pdf-parse
+    const pdfData = await pdfParse(pdfBuffer);
+    const pages = pdfData.text.split('\f'); // Split by form feed character
+
+    for (let i = 0; i < numPages; i++) {
       const page = pdfDoc.getPage(i);
       const { width, height } = page.getSize();
       
-      // Create a simple image representation
-      const imageBuffer = await sharp({
-        create: {
-          width: Math.round(width),
-          height: Math.round(height),
-          channels: 4,
-          background: { r: 255, g: 255, b: 255, alpha: 1 }
-        }
-      })
-      .png()
-      .toBuffer();
+      // Create a canvas with the same dimensions as the PDF page
+      const canvas = createCanvas(width, height);
+      const ctx = canvas.getContext('2d');
+
+      // Set white background
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, width, height);
+
+      // Set text properties
+      ctx.fillStyle = 'black';
+      ctx.font = '12px Arial';
+      ctx.textBaseline = 'top';
+
+      // Get text content for this page
+      const pageText = pages[i] || '';
       
-      const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
-      base64Images.push(base64Image);
+      // Split text into lines and draw them
+      const lines = pageText.split('\n');
+      const lineHeight = 20;
+      const margin = 40;
+
+      lines.forEach((line: string, index: number) => {
+        const y = margin + (index * lineHeight);
+        if (y < height - margin) {
+          ctx.fillText(line, margin, y);
+        }
+      });
+
+      // Convert canvas to buffer
+      const imageBuffer = canvas.toBuffer('image/png');
+
+      // Process image with sharp
+      const processedBuffer = await sharp(imageBuffer)
+        .resize(800, null, { fit: 'inside' })
+        .toBuffer();
+
+      // Save the processed image
+      const imagePath = path.join(tempDir, `page_${i + 1}.png`);
+      await fs.promises.writeFile(imagePath, processedBuffer);
+      imagePaths.push(imagePath);
     }
-    
-    return base64Images;
-  } finally {
-    // Clean up temporary files
-    if (fs.existsSync(outputDir)) {
-      const files = fs.readdirSync(outputDir);
-      for (const file of files) {
-        fs.unlinkSync(path.join(outputDir, file));
+
+    return imagePaths;
+  } catch (error) {
+    // Clean up any created files on error
+    for (const imagePath of imagePaths) {
+      try {
+        await unlink(imagePath);
+      } catch (e) {
+        console.error('Error cleaning up file:', e);
       }
-      fs.rmdirSync(outputDir);
     }
+    throw error;
   }
 }
 
@@ -180,10 +212,10 @@ app.post('/api/parse-pdf', upload.single('file'), async (req, res) => {
     try {
       // Convert PDF to images
       console.log('\nConverting PDF to images...');
-      const base64Images = await convertPdfToImages(req.file.buffer);
-      console.log(`Successfully converted PDF to ${base64Images.length} images`);
+      const imagePaths = await convertPdfToImages(req.file.buffer);
+      console.log(`Successfully converted PDF to ${imagePaths.length} images`);
 
-      if (base64Images.length === 0) {
+      if (imagePaths.length === 0) {
         console.error('No images were generated from the PDF');
         return res.status(400).json({ 
           error: 'Failed to convert PDF to images',
@@ -196,9 +228,9 @@ app.post('/api/parse-pdf', upload.single('file'), async (req, res) => {
       // Process each page with GPT-4 Vision
       const allResults: any[] = [];
       
-      for (let i = 0; i < base64Images.length; i++) {
-        console.log(`\n=== Processing page ${i + 1}/${base64Images.length} ===`);
-        const base64Image = base64Images[i];
+      for (let i = 0; i < imagePaths.length; i++) {
+        console.log(`\n=== Processing page ${i + 1}/${imagePaths.length} ===`);
+        const imagePath = imagePaths[i];
         try {
           console.log('Sending request to GPT-4 Vision API...');
           const completion = await openai.chat.completions.create({
@@ -215,7 +247,7 @@ app.post('/api/parse-pdf', upload.single('file'), async (req, res) => {
                   {
                     type: 'image_url',
                     image_url: {
-                      url: base64Image,
+                      url: imagePath,
                     }
                   }
                 ]
@@ -256,7 +288,7 @@ app.post('/api/parse-pdf', upload.single('file'), async (req, res) => {
         debug: {
           fileInfo: {
             size: req.file.size,
-            pages: base64Images.length,
+            pages: imagePaths.length,
             totalResults: allResults.length
           }
         }
