@@ -6,7 +6,7 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, rgb } from 'pdf-lib';
 import sharp from 'sharp';
 
 dotenv.config();
@@ -97,15 +97,17 @@ async function convertPdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     // Process each page
     for (let i = 0; i < pdfDoc.getPageCount(); i++) {
       const page = pdfDoc.getPage(i);
+      const { width, height } = page.getSize();
       
-      // Convert page to PNG
-      const pngImage = await page.exportAsPNG({
-        scale: 2.0, // Higher resolution
-      });
+      // Create a new PDF with just this page
+      const singlePageDoc = await PDFDocument.create();
+      const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [i]);
+      singlePageDoc.addPage(copiedPage);
       
-      // Use sharp to optimize the image
-      const optimizedImage = await sharp(pngImage)
-        .resize(2000, null, { // Resize to max width of 2000px
+      // Save as PNG using sharp
+      const pngBytes = await singlePageDoc.save();
+      const optimizedImage = await sharp(pngBytes)
+        .resize(2000, null, {
           fit: 'inside',
           withoutEnlargement: true
         })
