@@ -16,7 +16,8 @@
     "pdf-lib": "^1.17.1",
     "pdf-poppler": "^0.2.1",
     "sharp": "^0.34.1",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "nodemon":"^2.0.22"
   },
   "devDependencies": {
     "@types/cors": "^2.8.13",
